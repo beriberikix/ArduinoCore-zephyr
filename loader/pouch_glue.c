@@ -460,7 +460,17 @@ static void pouch_thread(void *a, void *b, void *c)
 	while (true) {
 		k_sem_take(&sync_now, K_SECONDS(CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S));
 
-		if (atomic_get(&pending_entries) > 0) {
+		/*
+		 * pending_entries only counts what a sketch wrote through
+		 * arduino_pouch_stream(). Entries produced by a POUCH_UPLINK_HANDLER
+		 * in the loader - the demo uplink, for one - are written during the
+		 * session itself, so they cannot be counted in advance and the device
+		 * would never ask for a gateway. Once bonded, pouch's broker ignores a
+		 * peripheral that is not requesting sync, so the relay would go quiet
+		 * after the first, unbonded connection.
+		 */
+		if (atomic_get(&pending_entries) > 0
+		    || IS_ENABLED(CONFIG_ARDUINO_POUCH_DEMO_UPLINK)) {
 			arduino_pouch_ble_request_sync(1);
 		}
 
@@ -553,6 +563,12 @@ int arduino_pouch_stream(const char *path, const void *data, size_t len, uint16_
 	}
 
 	return err;
+}
+
+/* Called by the BLE transport once a gateway has collected and gone. */
+void arduino_pouch_mark_flushed(void)
+{
+	atomic_clear(&pending_entries);
 }
 
 int arduino_pouch_status(void)

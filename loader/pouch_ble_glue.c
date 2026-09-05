@@ -91,8 +91,11 @@ static void ble_disconnected(struct bt_conn *conn, uint8_t reason)
 
 	LOG_INF("Gateway disconnected (reason 0x%02x)", reason);
 
-	/* The pouch went out with the gateway, so stop asking until the sketch
-	 * queues something new. */
+	/* The pouch went out with the gateway, so stop asking until there is
+	 * something new to send. */
+	extern void arduino_pouch_mark_flushed(void);
+
+	arduino_pouch_mark_flushed();
 	pouch_gatt_adv_req_sync(&service_data, false);
 	k_work_submit(&resume_work);
 }
