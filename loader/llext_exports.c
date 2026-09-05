@@ -215,6 +215,21 @@ EXPORT_SYMBOL(psa_crypto_init);
 #endif
 #endif
 
+/*
+ * Golioth Pouch. Deliberately narrow: these are loader-owned shims from
+ * pouch_glue.c, not Pouch symbols. Pouch registers handlers through linker
+ * iterable sections, which an llext cannot contribute to, so the session lives
+ * in the loader and a sketch only ever exchanges scalars and pointers with it.
+ * That also keeps Pouch's API churn from reaching sketches.
+ */
+#if defined(CONFIG_ARDUINO_POUCH)
+FORCE_EXPORT_SYM(arduino_pouch_begin);            /* start the session */
+FORCE_EXPORT_SYM(arduino_pouch_set_credentials);  /* override the built-in cert/key */
+FORCE_EXPORT_SYM(arduino_pouch_stream);           /* write an uplink entry */
+FORCE_EXPORT_SYM(arduino_pouch_status);           /* idle/connecting/online, or -errno */
+FORCE_EXPORT_SYM(arduino_pouch_sync_now);         /* flush without waiting out the interval */
+#endif
+
 #if defined(CONFIG_WIFI)
 FORCE_EXPORT_SYM(net_if_get_wifi_sta);
 FORCE_EXPORT_SYM(net_if_get_wifi_sap);
