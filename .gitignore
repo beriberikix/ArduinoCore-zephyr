@@ -17,3 +17,6 @@ includes.txt
 syms-dynamic.ld
 syms-static.ld
 tls-syms.S
+
+# Bring-up credentials for CONFIG_ARDUINO_POUCH (see pouch_credentials.h.example)
+/loader/pouch_credentials.h

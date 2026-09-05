@@ -23,3 +23,59 @@ config MAIN_STACK_REGION
 	depends on CODE_DATA_RELOCATION
 	help
 	  Specify the memory region for main stack.
+
+config ARDUINO_POUCH
+	bool "Golioth Pouch glue for Arduino sketches"
+	depends on POUCH
+	default y if POUCH
+	help
+	  Builds the loader-side glue that owns the Pouch session and exposes a
+	  small C API to sketches via llext_exports.c. Pouch's registration
+	  macros (POUCH_UPLINK_HANDLER, POUCH_EVENT_HANDLER) are linker
+	  iterable sections, which an llext cannot contribute to, so the
+	  session must live in the loader.
+
+if ARDUINO_POUCH
+
+config ARDUINO_POUCH_AUTOSTART
+	bool "Start the Pouch session at boot, without a sketch"
+	default n
+	help
+	  Normally the session starts when a sketch calls arduino_pouch_begin().
+	  Enable this to bring Pouch up from the loader alone, with no sketch
+	  loaded. Used to bring up and verify the loader before the Arduino
+	  wrapper exists.
+
+config ARDUINO_POUCH_DEMO_UPLINK
+	bool "Write demo entries on every uplink session"
+	default n
+	help
+	  Emit a fixed JSON entry on .s/sensor and a CBOR entry on .s/logs each
+	  time an uplink session opens. Bring-up aid; leave off once a sketch is
+	  supplying the data.
+
+config ARDUINO_POUCH_SYNC_PERIOD_S
+	int "Seconds between Pouch syncs"
+	default 30
+
+config ARDUINO_POUCH_SEC_TAG
+	int "sec_tag holding the DTLS credentials"
+	default 515765868
+
+config ARDUINO_POUCH_HEARTBEAT_LED
+	bool "Show Pouch bring-up progress on the RGB LED"
+	default n
+	help
+	  For boards whose console is on physical UART pins, where a hang gives
+	  no sign over USB. Red on entry, yellow once Pouch is initialised,
+	  green (blinking) once the transport is up.
+
+config ARDUINO_POUCH_THREAD_STACK_SIZE
+	int "Pouch glue thread stack size"
+	default 8192
+
+module = ARDUINO_POUCH
+module-str = Arduino Pouch glue
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # ARDUINO_POUCH
