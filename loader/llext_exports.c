@@ -241,7 +241,15 @@ FORCE_EXPORT_SYM(net_mgmt_NET_REQUEST_WIFI_DISCONNECT);
 FORCE_EXPORT_SYM(net_mgmt_NET_REQUEST_WIFI_VERSION);
 #endif
 
-#if defined(CONFIG_BT)
+/*
+ * These are the raw-HCI entry points that ArduinoBLE drives with its own host
+ * stack inside the sketch. They only exist when CONFIG_BT_HCI_RAW=y, so the
+ * guard cannot be plain CONFIG_BT: a variant that runs Zephyr's own Bluetooth
+ * host instead (BT_CENTRAL/BT_PERIPHERAL, as the Pouch gateway and BLE GATT
+ * transport require) has CONFIG_BT=y but none of these symbols, and the loader
+ * fails to link.
+ */
+#if defined(CONFIG_BT_HCI_RAW)
 FORCE_EXPORT_SYM(bt_enable_raw);
 FORCE_EXPORT_SYM(bt_send);
 FORCE_EXPORT_SYM(bt_buf_get_tx);
