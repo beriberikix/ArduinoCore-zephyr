@@ -44,3 +44,11 @@ target_compile_definitions(app PUBLIC _XOPEN_SOURCE=700)
 target_compile_definitions(app PUBLIC _GNU_SOURCE)
 
 target_link_libraries(app PUBLIC blobs)
+
+# Golioth Pouch: embed the root of trust for the DTLS connection to
+# coap.golioth.io. Referenced from the Pouch module rather than vendored here.
+if(CONFIG_ARDUINO_POUCH)
+    generate_inc_file_for_target(app
+        ${ZEPHYR_POUCH_MODULE_DIR}/examples/zephyr/coap_client/src/isrgrootx1.der
+        ${ZEPHYR_BINARY_DIR}/include/generated/pouch-dtls-ca.inc)
+endif()
