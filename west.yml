@@ -36,6 +36,7 @@ manifest:
           - nanopb
           - lvgl
           - fatfs
+          - zcbor
         path-allowlist:
           - modules/hal/*
 
@@ -53,3 +54,11 @@ manifest:
       # API changes broke the build. Update this SHA once a newer commit is
       # verified against the Zephyr revision above.
       revision: cf24edd66ab173d20f734e3f3350b1a1c053a904
+
+    - name: pouch
+      path: modules/lib/pouch
+      url: https://github.com/golioth/pouch.git
+      # Pinned to a known revision: pouch's README warns that breaking
+      # changes may land on `main` at any time.
+      # 89b42a7 "Fix uplink session key memory leak", 2026-08-31.
+      revision: 89b42a73664a5815a291fb01abebdb2a041e9458
