@@ -26,7 +26,7 @@ config MAIN_STACK_REGION
 
 config ARDUINO_POUCH
 	bool "Golioth Pouch glue for Arduino sketches"
-	depends on POUCH && POUCH_TRANSPORT_COAP_CLIENT
+	depends on POUCH
 	default y if POUCH
 	help
 	  Builds the loader-side glue that owns the Pouch session and exposes a
@@ -61,6 +61,14 @@ config ARDUINO_POUCH_SYNC_PERIOD_S
 config ARDUINO_POUCH_SEC_TAG
 	int "sec_tag holding the DTLS credentials"
 	default 515765868
+
+config ARDUINO_POUCH_HEARTBEAT_LED
+	bool "Show Pouch bring-up progress on the RGB LED"
+	default n
+	help
+	  For boards whose console is on physical UART pins, where a hang gives
+	  no sign over USB. Red on entry, yellow once Pouch is initialised,
+	  green (blinking) once the transport is up.
 
 config ARDUINO_POUCH_THREAD_STACK_SIZE
 	int "Pouch glue thread stack size"

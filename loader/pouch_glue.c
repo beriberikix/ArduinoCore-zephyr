@@ -48,15 +48,53 @@ LOG_MODULE_REGISTER(arduino_pouch, CONFIG_ARDUINO_POUCH_LOG_LEVEL);
 #include <pouch/pouch.h>
 #include <pouch/uplink.h>
 #include <pouch/types.h>
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 #include <pouch/transport/coap/client.h>
+#endif
 
 #include "pouch_credentials.h"
 
+#if defined(CONFIG_ARDUINO_POUCH_HEARTBEAT_LED)
+#include <zephyr/drivers/gpio.h>
+
+/*
+ * Boards whose console is on physical UART pins give no sign of life over USB.
+ * Drive the RGB LED as a coarse progress indicator so the stage a hang happens
+ * in can be read off the board:
+ *
+ *   red    - thread running, about to initialise Pouch
+ *   yellow - Pouch initialised (certificate parsed, PSA key imported)
+ *   green  - transport up; blinking once the device is advertising
+ */
+static const struct gpio_dt_spec hb_r = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led0), gpios, {0});
+static const struct gpio_dt_spec hb_g = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led1), gpios, {0});
+static const struct gpio_dt_spec hb_b = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led2), gpios, {0});
+
+static void hb_init(void)
+{
+	if (hb_r.port) gpio_pin_configure_dt(&hb_r, GPIO_OUTPUT_INACTIVE);
+	if (hb_g.port) gpio_pin_configure_dt(&hb_g, GPIO_OUTPUT_INACTIVE);
+	if (hb_b.port) gpio_pin_configure_dt(&hb_b, GPIO_OUTPUT_INACTIVE);
+}
+
+static void hb_set(int r, int g, int b)
+{
+	if (hb_r.port) gpio_pin_set_dt(&hb_r, r);
+	if (hb_g.port) gpio_pin_set_dt(&hb_g, g);
+	if (hb_b.port) gpio_pin_set_dt(&hb_b, b);
+}
+#else
+#define hb_init()          do { } while (0)
+#define hb_set(r, g, b)    do { } while (0)
+#endif
+
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 /* Root of trust for the DTLS connection to coap.golioth.io. Taken from the
  * Pouch module rather than vendored; see loader/CMakeLists.txt. */
 static const unsigned char dtls_ca_crt[] = {
 #include "pouch-dtls-ca.inc"
 };
+#endif
 
 #define SEC_TAG ((sec_tag_t) CONFIG_ARDUINO_POUCH_SEC_TAG)
 
@@ -135,6 +173,7 @@ out:
 	return key_id;
 }
 
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 static int load_dtls_credentials(void)
 {
 	int err;
@@ -255,6 +294,7 @@ static int link_up(void)
 
 	return 0;
 }
+#endif /* CONFIG_POUCH_TRANSPORT_COAP_CLIENT */
 
 static int pouch_bring_up(void)
 {
@@ -278,6 +318,7 @@ static int pouch_bring_up(void)
 		return err;
 	}
 
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 	err = load_dtls_credentials();
 	if (err) {
 		return err;
@@ -288,6 +329,7 @@ static int pouch_bring_up(void)
 		LOG_ERR("pouch_coap_client_init failed: %d", err);
 		return err;
 	}
+#endif
 
 	return 0;
 }
@@ -349,18 +391,25 @@ static void pouch_thread(void *a, void *b, void *c)
 	ARG_UNUSED(b);
 	ARG_UNUSED(c);
 
+	int err;
+
+	hb_init();
+	hb_set(1, 0, 0);   /* red: thread running */
+
 	k_sem_take(&start_sem, K_FOREVER);
 	atomic_set(&glue_status, POUCH_STATUS_CONNECTING);
 
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 	net_mgmt_init_event_callback(&ipv4_cb, ipv4_handler, NET_EVENT_IPV4_ADDR_ADD);
 	net_mgmt_add_event_callback(&ipv4_cb);
 
-	int err = link_up();
+	err = link_up();
 	if (err) {
 		glue_last_err = err;
 		atomic_set(&glue_status, err);
 		return;
 	}
+#endif
 
 	err = pouch_bring_up();
 	if (err) {
@@ -369,19 +418,65 @@ static void pouch_thread(void *a, void *b, void *c)
 		return;
 	}
 
+	hb_set(1, 1, 0);   /* yellow: Pouch initialised */
+
 	/*
-	 * Online means "link up and transport ready to accept data", not "a round
-	 * trip just succeeded". Gating on a completed sync would deadlock: a
-	 * sketch that only streams while connected() would never produce the data
-	 * that makes the first sync possible.
+	 * Online means "transport ready to accept data", not "a round trip just
+	 * succeeded". Gating on a completed sync would deadlock: a sketch that
+	 * only streams while connected() would never produce the data that makes
+	 * the first sync possible.
 	 */
 	atomic_set(&glue_status, POUCH_STATUS_ONLINE);
+
+#if defined(CONFIG_POUCH_GATEWAY)
+	/* Bring up the BLE broker once the cloud side is proven. */
+	extern int arduino_pouch_gateway_start(void);
+
+	err = arduino_pouch_gateway_start();
+	if (err) {
+		LOG_ERR("Gateway start failed: %d", err);
+		glue_last_err = err;
+	}
+#endif
+
+#if defined(CONFIG_POUCH_TRANSPORT_BLE_GATT)
+	/*
+	 * Device role. There is no sync loop: a gateway collects from us. All we
+	 * do is raise the sync-request flag in the advertisement when the sketch
+	 * has queued something, and lower it once a gateway has been and gone.
+	 */
+	extern int arduino_pouch_ble_start(void);
+	extern int arduino_pouch_ble_request_sync(int enable);
+
+	err = arduino_pouch_ble_start();
+	if (err) {
+		glue_last_err = err;
+		atomic_set(&glue_status, err);
+		return;
+	}
+
+	hb_set(0, 1, 0);   /* green: advertising */
+
+	while (true) {
+		k_sem_take(&sync_now, K_SECONDS(CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S));
+
+		if (atomic_get(&pending_entries) > 0) {
+			arduino_pouch_ble_request_sync(1);
+		}
+
+		/* Blink green so "advertising" is distinguishable from "hung". */
+		hb_set(0, 0, 0);
+		k_sleep(K_MSEC(120));
+		hb_set(0, 1, 0);
+	}
+#else
 	LOG_INF("Pouch ready, syncing every %ds", CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S);
 
 	while (true) {
 		bool forced = k_sem_take(&sync_now, K_SECONDS(CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S)) == 0;
 
-		if (!IS_ENABLED(CONFIG_ARDUINO_POUCH_DEMO_UPLINK) && !forced
+		if (!IS_ENABLED(CONFIG_ARDUINO_POUCH_DEMO_UPLINK)
+		    && !IS_ENABLED(CONFIG_POUCH_GATEWAY) && !forced
 		    && atomic_get(&pending_entries) == 0) {
 			continue;
 		}
@@ -396,6 +491,7 @@ static void pouch_thread(void *a, void *b, void *c)
 			glue_last_err = 0;
 		}
 	}
+#endif
 }
 
 K_THREAD_DEFINE(arduino_pouch_tid, CONFIG_ARDUINO_POUCH_THREAD_STACK_SIZE, pouch_thread, NULL, NULL,
