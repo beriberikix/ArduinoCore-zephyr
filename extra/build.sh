@@ -52,6 +52,7 @@ if ! [ -z "$chosen_board" ]; then
 	arg_token='(?:[^\s"'\'']+|"[^"]*"|'\''[^'\'']*'\'')+'
 	mapfile -t args < <(jq -cr '.args' <<< "$chosen_board" | grep -oP "$arg_token")
 	upload_offset=$(jq -cr '.upload_offset' <<< "$chosen_board")
+	sysbuild=$(jq -cr '.sysbuild' <<< "$chosen_board")
 
 	# Check for debug flag and append
 	if [ x$2 == x"--debug" ]; then
@@ -67,6 +68,7 @@ else
 	if [ ! -z "$chosen_board" ]; then
 		board=$(jq -cr '.board' <<< "$chosen_board")
 		upload_offset=$(jq -cr '.upload_offset' <<< "$chosen_board")
+		sysbuild=$(jq -cr '.sysbuild' <<< "$chosen_board")
 	else
 		log_msg warning "No board for '$target' defined in 'boards.txt'. A proper definition is required to use the core."
 	fi
@@ -93,12 +95,25 @@ fi
 BUILD_DIR=build/${variant}
 VARIANT_DIR=variants/${variant}
 rm -rf ${BUILD_DIR}
-west build -d ${BUILD_DIR} -b ${target} loader -t llext-edk "${args[@]}"
+
+if [ "$sysbuild" == "true" ] ; then
+	# Multi-image build: MCUboot plus the loader, the latter signed into
+	# image-0. Sysbuild names the application image after its source
+	# directory, so the loader's own artifacts land one level deeper.
+	IMG_DIR=${BUILD_DIR}/loader
+	west build -d ${BUILD_DIR} -b ${target} --sysbuild loader "${args[@]}"
+	# The top-level sysbuild ninja does not re-export per-image custom
+	# targets, so the EDK has to be asked for by domain.
+	west build -d ${BUILD_DIR} --domain loader -t llext-edk
+else
+	IMG_DIR=${BUILD_DIR}
+	west build -d ${BUILD_DIR} -b ${target} loader -t llext-edk "${args[@]}"
+fi
 
 # Extract the generated EDK tarball and copy it to the variant directory
 mkdir -p ${VARIANT_DIR} firmwares
-(set -e ; cd ${BUILD_DIR} && rm -rf llext-edk && tar xf zephyr/llext-edk.tar.Z)
-rsync -a --delete ${BUILD_DIR}/llext-edk ${VARIANT_DIR}/
+(set -e ; cd ${IMG_DIR} && rm -rf llext-edk && tar xf zephyr/llext-edk.tar.Z)
+rsync -a --delete ${IMG_DIR}/llext-edk ${VARIANT_DIR}/
 
 # remove all inline comments in macro definitions
 # (especially from devicetree_generated.h and sys/util_internal.h)
@@ -110,18 +125,34 @@ perl -i -pe "s/${c_comment}//gs unless /${line_preproc_ok}/ || (/${line_comment_
 
 for ext in elf bin hex uf2; do
     rm -f firmwares/zephyr-$variant.$ext
-    if [ -f ${BUILD_DIR}/zephyr/zephyr.$ext ]; then
-        cp ${BUILD_DIR}/zephyr/zephyr.$ext firmwares/zephyr-$variant.$ext
+    if [ -f ${IMG_DIR}/zephyr/zephyr.$ext ]; then
+        cp ${IMG_DIR}/zephyr/zephyr.$ext firmwares/zephyr-$variant.$ext
     fi
 done
-cp ${BUILD_DIR}/zephyr/zephyr.dts firmwares/zephyr-$variant.dts
-cp ${BUILD_DIR}/zephyr/.config firmwares/zephyr-$variant.config
+
+# Under MCUboot the raw zephyr.bin is not bootable on its own: what goes into
+# image-0 is the signed image, and what a bare board needs is MCUboot and the
+# signed loader together. Publish both, and the OTA artifact separately - it is
+# the signed image that gets uploaded to Golioth.
+for ext in signed.bin signed.hex signed.confirmed.bin; do
+    rm -f firmwares/zephyr-$variant.$ext
+    if [ -f ${IMG_DIR}/zephyr/zephyr.$ext ]; then
+        cp ${IMG_DIR}/zephyr/zephyr.$ext firmwares/zephyr-$variant.$ext
+    fi
+done
+rm -f firmwares/zephyr-$variant.merged.hex
+if [ -f ${BUILD_DIR}/merged.hex ]; then
+    cp ${BUILD_DIR}/merged.hex firmwares/zephyr-$variant.merged.hex
+fi
+
+cp ${IMG_DIR}/zephyr/zephyr.dts firmwares/zephyr-$variant.dts
+cp ${IMG_DIR}/zephyr/.config firmwares/zephyr-$variant.config
 
 # Generate the provides.ld file for linked builds
 echo "Generating exported symbol scripts"
-extra/gen_provides.py "${BUILD_DIR}/zephyr/zephyr.elf" -T > ${VARIANT_DIR}/tls-syms.S
-extra/gen_provides.py "${BUILD_DIR}/zephyr/zephyr.elf" -L > ${VARIANT_DIR}/syms-dynamic.ld
-extra/gen_provides.py "${BUILD_DIR}/zephyr/zephyr.elf" -LF \
+extra/gen_provides.py "${IMG_DIR}/zephyr/zephyr.elf" -T > ${VARIANT_DIR}/tls-syms.S
+extra/gen_provides.py "${IMG_DIR}/zephyr/zephyr.elf" -L > ${VARIANT_DIR}/syms-dynamic.ld
+extra/gen_provides.py "${IMG_DIR}/zephyr/zephyr.elf" -LF \
 	"+kheap_llext_heap" \
 	"+kheap__system_heap" \
 	"*sketch_base_addr=_sketch_start" \
