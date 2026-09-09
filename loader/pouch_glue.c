@@ -47,11 +47,14 @@ LOG_MODULE_REGISTER(arduino_pouch, CONFIG_ARDUINO_POUCH_LOG_LEVEL);
 
 #include <pouch/pouch.h>
 #include <pouch/uplink.h>
+#include <pouch/downlink.h>
+#include <pouch/events.h>
 #include <pouch/types.h>
 #if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 #include <pouch/transport/coap/client.h>
 #endif
 
+#include "arduino_pouch.h"
 #include "pouch_credentials.h"
 
 #if defined(CONFIG_ARDUINO_POUCH_HEARTBEAT_LED)
@@ -385,6 +388,62 @@ static void demo_uplink(void)
 POUCH_UPLINK_HANDLER(demo_uplink);
 #endif /* CONFIG_ARDUINO_POUCH_DEMO_UPLINK */
 
+/*
+ * Loader-to-sketch trampolines.
+ *
+ * POUCH_EVENT_HANDLER and POUCH_DOWNLINK_HANDLER are linker iterable sections,
+ * so an llext cannot register one. The loader owns the single section entry and
+ * re-exports a runtime registration function instead - the same shape
+ * fixups.c uses to hand INPUT_CALLBACK_DEFINE to sketches.
+ *
+ * Calling into the llext is safe here: CONFIG_USERSPACE=n and the sketch runs
+ * via llext_bootstrap() on a loader thread in supervisor mode, and it is never
+ * unloaded, so a registered pointer stays valid. It does borrow the calling
+ * thread's stack, which for these is Pouch's own work queue - keep sketch
+ * callbacks short.
+ *
+ * Every pointer is NULL until a sketch registers: CONFIG_ARDUINO_POUCH_AUTOSTART
+ * means the session can open before setup() has run.
+ */
+static arduino_pouch_event_cb_t sketch_event_cb;
+static void *sketch_event_ctx;
+
+static arduino_pouch_downlink_start_cb_t sketch_dl_start_cb;
+static arduino_pouch_downlink_data_cb_t sketch_dl_data_cb;
+static void *sketch_dl_ctx;
+
+/* Set once a sketch asks for downlink; see the sync gate in pouch_thread(). */
+static atomic_t downlink_wanted = ATOMIC_INIT(0);
+
+static void glue_event_handler(enum pouch_event event, void *ctx)
+{
+	ARG_UNUSED(ctx);
+
+	LOG_DBG("Pouch event %d", (int) event);
+
+	if (sketch_event_cb != NULL) {
+		sketch_event_cb((int) event, sketch_event_ctx);
+	}
+}
+POUCH_EVENT_HANDLER(glue_event_handler, NULL);
+
+static void glue_downlink_start(unsigned int stream_id, const char *path, uint16_t content_type)
+{
+	LOG_DBG("Downlink %u open: %s (ct %u)", stream_id, path, content_type);
+
+	if (sketch_dl_start_cb != NULL) {
+		sketch_dl_start_cb(stream_id, path, content_type, sketch_dl_ctx);
+	}
+}
+
+static void glue_downlink_data(unsigned int stream_id, const void *data, size_t len, bool is_last)
+{
+	if (sketch_dl_data_cb != NULL) {
+		sketch_dl_data_cb(stream_id, data, len, is_last ? 1 : 0, sketch_dl_ctx);
+	}
+}
+POUCH_DOWNLINK_HANDLER(glue_downlink_start, glue_downlink_data);
+
 static void pouch_thread(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a);
@@ -479,14 +538,25 @@ static void pouch_thread(void *a, void *b, void *c)
 		k_sleep(K_MSEC(120));
 		hb_set(0, 1, 0);
 	}
-#else
+#elif defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 	LOG_INF("Pouch ready, syncing every %ds", CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S);
 
 	while (true) {
 		bool forced = k_sem_take(&sync_now, K_SECONDS(CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S)) == 0;
 
+		/*
+		 * Skipping a sync with nothing queued avoids POSTing an empty pouch,
+		 * which the gateway answers with 4.00. But downlink only ever arrives
+		 * as the response to a sync, so anything that consumes downlink -
+		 * a sketch's downlink handler, Settings, OTA - has to keep the sync
+		 * happening regardless of whether we have something to say.
+		 */
+		bool want_downlink = atomic_get(&downlink_wanted) != 0
+				     || IS_ENABLED(CONFIG_GOLIOTH_SETTINGS)
+				     || IS_ENABLED(CONFIG_GOLIOTH_OTA);
+
 		if (!IS_ENABLED(CONFIG_ARDUINO_POUCH_DEMO_UPLINK)
-		    && !IS_ENABLED(CONFIG_POUCH_GATEWAY) && !forced
+		    && !IS_ENABLED(CONFIG_POUCH_GATEWAY) && !forced && !want_downlink
 		    && atomic_get(&pending_entries) == 0) {
 			continue;
 		}
@@ -501,6 +571,8 @@ static void pouch_thread(void *a, void *b, void *c)
 			glue_last_err = 0;
 		}
 	}
+#else
+#error "CONFIG_ARDUINO_POUCH needs a Pouch transport: BLE GATT or CoAP client"
 #endif
 }
 
@@ -601,6 +673,37 @@ int arduino_pouch_sync_now(uint32_t timeout_ms)
 	}
 
 	return glue_last_err ? glue_last_err : -ETIMEDOUT;
+}
+
+int arduino_pouch_on_event(arduino_pouch_event_cb_t cb, void *user_data)
+{
+	/* Order matters: publish the context before the pointer the trampoline
+	 * tests, so a session event landing mid-registration cannot read a stale
+	 * context against a fresh callback. */
+	sketch_event_ctx = user_data;
+	compiler_barrier();
+	sketch_event_cb = cb;
+
+	return 0;
+}
+
+int arduino_pouch_on_downlink(arduino_pouch_downlink_start_cb_t start_cb,
+			      arduino_pouch_downlink_data_cb_t data_cb, void *user_data)
+{
+	sketch_dl_ctx = user_data;
+	compiler_barrier();
+	sketch_dl_start_cb = start_cb;
+	sketch_dl_data_cb = data_cb;
+
+	/*
+	 * Downlink only ever arrives as the response to a sync, and the sync loop
+	 * skips syncing when there is nothing queued. Registering a consumer has
+	 * to lift that gate or the callbacks would only ever fire on the syncs
+	 * that happened to carry uplink.
+	 */
+	atomic_set(&downlink_wanted, (start_cb != NULL || data_cb != NULL) ? 1 : 0);
+
+	return 0;
 }
 
 #endif /* CONFIG_ARDUINO_POUCH */

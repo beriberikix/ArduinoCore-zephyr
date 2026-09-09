@@ -24,6 +24,7 @@ for BOARD in $(get_boards); do
 	ARTIFACT=$(get_board_field $BOARD "build\\.artifact")
 	ARTIFACT=${ARTIFACT:-zephyr_contrib}
 	UPLOAD_OFFSET=$(get_board_field $BOARD "upload\\.offset")
+	SYSBUILD=$(get_board_field $BOARD "build\\.zephyr_sysbuild")
 
 	ARTIFACT_JSON=extra/artifacts/$ARTIFACT.json
 	if ! [ -f "$ARTIFACT_JSON" ] ; then
@@ -51,7 +52,8 @@ for BOARD in $(get_boards); do
 	  "hals": "$HALS",
 	  "artifact": "$ARTIFACT",
 	  "subarch": "$SUBARCH",
-	  "upload_offset": "$UPLOAD_OFFSET"
+	  "upload_offset": "$UPLOAD_OFFSET",
+	  "sysbuild": "$SYSBUILD"
 	}
 EOF
 done | jq -crs .

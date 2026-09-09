@@ -228,6 +228,22 @@ FORCE_EXPORT_SYM(arduino_pouch_set_credentials);  /* override the built-in cert/
 FORCE_EXPORT_SYM(arduino_pouch_stream);           /* write an uplink entry */
 FORCE_EXPORT_SYM(arduino_pouch_status);           /* idle/connecting/online, or -errno */
 FORCE_EXPORT_SYM(arduino_pouch_sync_now);         /* flush without waiting out the interval */
+FORCE_EXPORT_SYM(arduino_pouch_on_event);         /* session start/end callback */
+FORCE_EXPORT_SYM(arduino_pouch_on_downlink);      /* downlink start/data callbacks */
+#if defined(CONFIG_GOLIOTH_SETTINGS)
+FORCE_EXPORT_SYM(arduino_pouch_on_setting_int);   /* bind a key to an int slot */
+FORCE_EXPORT_SYM(arduino_pouch_on_setting_bool);
+FORCE_EXPORT_SYM(arduino_pouch_on_setting_float);
+FORCE_EXPORT_SYM(arduino_pouch_on_setting_string);
+#endif
+#if defined(CONFIG_GOLIOTH_OTA)
+FORCE_EXPORT_SYM(arduino_pouch_on_ota_manifest);  /* take over the download decision */
+FORCE_EXPORT_SYM(arduino_pouch_ota_mark);         /* request download / go idle */
+FORCE_EXPORT_SYM(arduino_pouch_ota_sketch_version);
+#endif
+#if defined(CONFIG_POUCH_GATEWAY)
+FORCE_EXPORT_SYM(arduino_pouch_gateway_bonding);  /* open/close the BLE pairing window */
+#endif
 #endif
 
 #if defined(CONFIG_WIFI)

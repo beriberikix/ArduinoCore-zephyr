@@ -70,6 +70,39 @@ config ARDUINO_POUCH_HEARTBEAT_LED
 	  no sign over USB. Red on entry, yellow once Pouch is initialised,
 	  green (blinking) once the transport is up.
 
+config ARDUINO_POUCH_OTA_FW_PACKAGE
+	string "Golioth package name for the loader image"
+	depends on GOLIOTH_OTA
+	default "loader"
+	help
+	  The artifact published under this package name is treated as a signed
+	  MCUboot image: staged in slot1 and swapped in on the next boot.
+
+config ARDUINO_POUCH_OTA_SKETCH_PACKAGE
+	string "Golioth package name for the Arduino sketch"
+	depends on GOLIOTH_OTA
+	default "sketch"
+	help
+	  The artifact published under this package name is treated as a raw
+	  .ino.elf-zsk.bin and written directly into the user_sketch partition.
+	  Nothing signs it - the zsk header is the only validation - so publish
+	  to this package only from a trusted build.
+
+config ARDUINO_POUCH_SETTING_SLOTS
+	int "Runtime-bindable Golioth Settings slots, per value type"
+	depends on GOLIOTH_SETTINGS
+	default 4
+	range 1 4
+	help
+	  Golioth's GOLIOTH_SETTINGS_HANDLER() fixes a setting's key and type at
+	  compile time, which an llext cannot do. The loader instead pre-declares
+	  this many handler slots for each of the four value types, with their
+	  keys in RAM, and a sketch binds a key to one at runtime.
+
+	  Costs one section entry plus 32 bytes of RAM per slot per type. Raising
+	  the ceiling needs matching ARDUINO_SETTING_SLOT() lines in
+	  loader/pouch_services.c.
+
 config ARDUINO_POUCH_THREAD_STACK_SIZE
 	int "Pouch glue thread stack size"
 	default 8192

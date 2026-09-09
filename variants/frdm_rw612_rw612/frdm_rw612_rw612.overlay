@@ -12,13 +12,8 @@
 	};
 };
 
-&w25q512jvfiq {
-	partitions {
-		user_sketch: partition@323000 {
-			reg = <0x00323000 (DT_SIZE_M(3) - 0x3000)>;
-		};
-	};
-};
+/* Shared with the MCUboot image; see the header comment there. */
+#include "frdm_rw612_rw612-partitions.dtsi"
 
 / {
 	zephyr,user {

@@ -9,3 +9,8 @@
 # against the path of each sketch found in this repo. If a match is found, the
 # sketch compilation result will be ignored.
 
+
+# GoliothToF drives the Nicla Vision's on-board VL53L1CB over Wire1. This
+# variant exposes a single I2C bus (zephyr,user i2cs = <&arduino_i2c>), so
+# Wire1 does not exist here. The example is board-specific, not broken.
+libraries/Golioth/examples/GoliothToF
