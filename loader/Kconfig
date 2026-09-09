@@ -18,6 +18,20 @@ config LLEXT_HEAP_REGION
 	help
 	  Specify the memory region for LLEXT heap.
 
+config ARDUINO_USB_DTR_TIMEOUT_MS
+	int "Milliseconds to wait for the USB CDC port to be opened"
+	default 30000
+	help
+	  On boards whose first Serial is the native USB CDC, the loader waits in
+	  main() for a terminal to raise DTR before running the sketch, so early
+	  Serial output is not lost.
+
+	  This bounds that wait. It matters because DTR may never assert at all -
+	  if CDC ACM registration fails, an unbounded wait leaves the board with
+	  no console, no network and no sketch, looking hung.
+
+	  Set to 0 to wait forever.
+
 config MAIN_STACK_REGION
 	string "Main stack memory region"
 	depends on CODE_DATA_RELOCATION

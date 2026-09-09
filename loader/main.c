@@ -187,12 +187,42 @@ static int loader(const struct shell *sh) {
 		shell_uninit(shell_backend_uart_get_ptr(), NULL);
 		// enables USB and starts the shell
 		loader_usb_enable();
-		int dtr;
-		do {
-			// wait for the serial port to open
-			uart_line_ctrl_get(usb_dev, UART_LINE_CTRL_DTR, &dtr);
+
+		/*
+		 * Wait for a terminal to open the CDC port, so a sketch's early
+		 * Serial output is not lost before anyone is listening.
+		 *
+		 * Bounded, because "wait for DTR" has a failure mode that is not
+		 * the user being slow: if CDC ACM registration fails outright
+		 * (usbd_class: "Failed to register cdc_acm_0 to HS configuration 1")
+		 * then DTR can never assert, and an unbounded wait parks main()
+		 * here forever - no console, no network, and the sketch never
+		 * starts. That is indistinguishable from a hung board.
+		 *
+		 * uart_line_ctrl_get() is also checked now: it fails while the
+		 * port is not ready, and the old code read 'dtr' regardless, which
+		 * was uninitialised.
+		 */
+		int dtr = 0;
+#if CONFIG_ARDUINO_USB_DTR_TIMEOUT_MS > 0
+		const int64_t dtr_deadline = k_uptime_get() + CONFIG_ARDUINO_USB_DTR_TIMEOUT_MS;
+#endif
+		while (true) {
+			if (uart_line_ctrl_get(usb_dev, UART_LINE_CTRL_DTR, &dtr) != 0) {
+				dtr = 0;
+			}
+			if (dtr) {
+				break;
+			}
+#if CONFIG_ARDUINO_USB_DTR_TIMEOUT_MS > 0
+			if (k_uptime_get() >= dtr_deadline) {
+				printk("USB CDC not opened within %d ms; continuing without it\n",
+				       CONFIG_ARDUINO_USB_DTR_TIMEOUT_MS);
+				break;
+			}
+#endif
 			k_sleep(K_MSEC(100));
-		} while (!dtr);
+		}
 		enable_shell_usb();
 	}
 #elif CONFIG_LOG
