@@ -298,12 +298,18 @@ Two rules that are easy to get wrong:
   the image's compiled-in version disagree, the swapped-in loader reports the
   old version, the manifest still differs, and the device update-reboots forever.
   `PINNED_CORE_VERSION` is what keeps them equal.
-- **One artifact per deployment.** Pouch's
-  `golioth_sdk/ota.c:ota_receive_manifest()` fails at its first
-  `zcbor_map_start_decode` on a two-component manifest -
-  `<err> ota: Failed to deserialize manifest` on every sync, and nothing ever
-  updates. The cloud accepts an `artifactIds` array quite happily; the device
-  cannot parse the result. Ship the loader and the sketch as separate deployments.
+- **One artifact per deployment.** A manifest carrying two components fails to
+  deserialize on the device - `<wrn> zcbor_util: Did not start CBOR map
+  correctly` followed by `<err> ota: Failed to deserialize manifest`, on every
+  sync, and nothing ever updates. The cloud accepts an `artifactIds` array quite
+  happily; the device cannot parse the result.
+
+  The cause is upstream: `zcbor_map_decode()` stops once it has matched the
+  caller's registered entries, and `ota_receive_manifest()` registers four of a
+  component's six keys, so the payload pointer is left stranded inside the first
+  component. Reported as
+  [golioth/pouch#354](https://github.com/golioth/pouch/issues/354). Until that
+  lands, ship the loader and the sketch as separate deployments.
 
 Expect `Package <other> is not included in the active deployment` in the cloud
 logs while doing that: the device reports every registered component on every
