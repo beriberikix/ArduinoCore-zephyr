@@ -12,36 +12,8 @@
 	};
 };
 
-/*
- * Flash map. The stock frdm_rw612 table is mcuboot(128K) / image-0(3M) /
- * image-1(3M) / storage(rest), and the sketch partition used to be carved out
- * of the front of image-1 - i.e. it *was* MCUboot's secondary slot. That is
- * fine only for as long as there is no MCUboot: a swap upgrade would eat the
- * sketch, and staging an image would eat it the other way round.
- *
- * So the sketch moves to the very top of the 64 MB device, above storage, and
- * both slots keep their stock geometry. Placing it last (rather than at
- * 0x620000) also keeps storage's node name and unit address in agreement,
- * which a &storage_partition resize alone would not.
- *
- *   0x0000000  mcuboot      128K
- *   0x0020000  image-0        3M   <- signed loader, XIP
- *   0x0320000  image-1        3M   <- OTA staging
- *   0x0620000  storage    ~54.9M
- *   0x3D00000  user_sketch    3M   <- llext, raw, never touched by a swap
- */
-&w25q512jvfiq {
-	partitions {
-		user_sketch: partition@3d00000 {
-			reg = <0x03d00000 DT_SIZE_M(3)>;
-		};
-	};
-};
-
-/* Shrink storage so it ends where user_sketch begins. */
-&storage_partition {
-	reg = <0x00620000 (DT_SIZE_M(58) - DT_SIZE_K(128) - DT_SIZE_M(3))>;
-};
+/* Shared with the MCUboot image; see the header comment there. */
+#include "frdm_rw612_rw612-partitions.dtsi"
 
 / {
 	zephyr,user {

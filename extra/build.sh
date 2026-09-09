@@ -101,7 +101,17 @@ if [ "$sysbuild" == "true" ] ; then
 	# image-0. Sysbuild names the application image after its source
 	# directory, so the loader's own artifacts land one level deeper.
 	IMG_DIR=${BUILD_DIR}/loader
-	west build -d ${BUILD_DIR} -b ${target} --sysbuild loader "${args[@]}"
+	# MCUboot is a separate image with its own devicetree and resolves
+	# slot0/slot1 from its own copy, so it has to be handed the same flash map
+	# as the loader. Without this the loader would stage a downloaded image
+	# where MCUboot is not looking for it.
+	SHARED_PARTITIONS=$(pwd)/${VARIANT_DIR}/${variant}-partitions.dtsi
+	MCUBOOT_ARGS=()
+	if [ -f "${SHARED_PARTITIONS}" ] ; then
+		MCUBOOT_ARGS+=(-Dmcuboot_EXTRA_DTC_OVERLAY_FILE="${SHARED_PARTITIONS}")
+	fi
+	west build -d ${BUILD_DIR} -b ${target} --sysbuild loader "${args[@]}" \
+		-- "${MCUBOOT_ARGS[@]}"
 	# The top-level sysbuild ninja does not re-export per-image custom
 	# targets, so the EDK has to be asked for by domain.
 	west build -d ${BUILD_DIR} --domain loader -t llext-edk

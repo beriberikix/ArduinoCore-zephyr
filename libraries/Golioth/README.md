@@ -91,171 +91,37 @@ anything. Use `LOOP_DELAY`.
 The loader is built through **sysbuild with MCUboot** on this board
 (`frdm_rw612.build.zephyr_sysbuild=true` in `boards.txt`,
 `SB_CONFIG_BOOTLOADER_MCUBOOT=y` in `loader/sysbuild.conf`), so a Golioth OTA can
-replace the whole OS. That forced the sketch partition to move: it used to sit at
-`0x323000`, *inside* `slot1_partition`, which is MCUboot's staging slot.
+replace the whole OS. That collided with the sketch: `user_sketch` was carved out
+of the front of `slot1_partition`, which is MCUboot's staging slot.
+
+**`image-1` moves, not the sketch.** Nothing hardcodes a slot address — MCUboot
+resolves them by devicetree label — whereas `0x18323000` is committed in the
+released `arduino:zephyr_contrib` `boards.txt`, so moving the sketch would
+silently break every upload made with that core.
 
 | partition | offset | size | |
 |---|---|---|---|
 | `boot_partition` | `0x000000` | 128 K | MCUboot |
 | `slot0_partition` | `0x020000` | 3 M | signed loader, XIP |
-| `slot1_partition` | `0x320000` | 3 M | OTA staging |
-| `storage_partition` | `0x620000` | ~54.9 M | |
-| `user_sketch` | `0x3D00000` | 3 M | llext, raw, never touched by a swap |
+| `user_sketch` | `0x323000` | 3 M − 12 K | llext, raw, never touched by a swap |
+| `slot1_partition` | `0x620000` | 3 M | OTA staging |
+| `storage_partition` | `0x920000` | ~54.9 M | |
 
-**The J-Link sketch upload address is now `0x1BD00000`.** `boards.local.txt`
-regenerates it from the devicetree, so trust that file.
+The sketch upload address is therefore **unchanged** at `0x18323000`, identical
+to the community core.
+
+The map lives in `variants/frdm_rw612_rw612/frdm_rw612_rw612-partitions.dtsi` and
+is included by the loader overlay **and** handed to the MCUboot image
+(`-Dmcuboot_EXTRA_DTC_OVERLAY_FILE`, wired up in `extra/build.sh`). That sharing
+is not optional: each sysbuild image is a separate Zephyr build with its own
+devicetree, and MCUboot locates the slots from its own copy. If only the loader
+moved a slot, it would stage a downloaded image where MCUboot is not looking —
+a silent corruption rather than a clean failure.
 
 Note that `extra/build.sh` publishes `zephyr-<variant>.signed.bin` / `.signed.hex`
 alongside the unsigned image; the signed one is what goes in slot0 and what you
 upload to Golioth. The build uses MCUboot's **default debug signing key** — fine
 for development, not for production.
-
-## Reproduce from scratch
-
-### 1. Host prerequisites
-
-```bash
-brew install python cmake ninja zstd jq git wget bash gnu-sed arduino-cli
-```
-
-macOS ships bash 3.2, but `extra/build.sh` uses `mapfile` (bash 4+) and GNU
-`sed -i`. Run the loader build through Homebrew's bash with GNU sed on PATH:
-
-```bash
-PATH="/opt/homebrew/opt/gnu-sed/libexec/gnubin:$PATH" bash extra/build.sh frdm_rw612
-```
-
-### 2. Workspace
-
-`west init -l` puts the workspace top directory at the *parent* of this repo:
-
-```
-<topdir>/
-├── ArduinoCore-zephyr/     <- this repo
-├── zephyr/  modules/  bootloader/
-└── modules/lib/pouch/
-```
-
-```bash
-cd ArduinoCore-zephyr
-./extra/bootstrap.sh
-. venv/bin/activate
-pip install -r ../modules/lib/pouch/requirements.txt   # zcbor CLI, required by Pouch's CMake
-pip install cryptography intelhex                      # imgtool, only if you use sysbuild
-west blobs fetch arduino-api hal_nxp                   # interactive: NXP licences
-```
-
-`west.yml` adds `pouch` at a pinned revision and adds `zcbor` to the
-`name-allowlist` — `CONFIG_POUCH` selects `ZCBOR`, and without the allowlist
-entry west never clones it.
-
-### 3. Credentials
-
-Issue a device certificate from
-[Golioth PKI](https://docs.golioth.io/connectivity/credentials/pki). Golioth
-reads the certificate's `O=` as the project ID and `CN=` as the device ID; the
-device is auto-provisioned on first connect.
-
-```bash
-cp loader/pouch_credentials.h.example loader/pouch_credentials.h
-openssl x509 -in dev.crt.pem -outform DER | xxd -i    # -> device_crt_der[]
-openssl pkey -in dev.key.pem -outform DER | xxd -i    # -> device_key_der[]
-```
-
-Set `POUCH_WIFI_SSID` / `POUCH_WIFI_PSK` in the same file. Leaving the SSID
-empty is supported — the glue then waits for you to run
-`wifi connect -s <ssid> -p <psk> -k 1` from the Zephyr shell.
-
-`loader/pouch_credentials.h` is gitignored.
-
-### 4. Build and flash the loader
-
-```bash
-PATH="/opt/homebrew/opt/gnu-sed/libexec/gnubin:$PATH" bash extra/build.sh frdm_rw612
-west flash -d build/frdm_rw612_rw612
-```
-
-### 5. Install the core for the IDE/CLI
-
-```bash
-ln -sfn "$PWD" ~/Documents/Arduino/hardware/arduino-git/zephyr
-arduino-cli core install arduino:zephyr     # toolchain and sketch tools
-```
-
-The folder **must** be named `zephyr` — it becomes the FQBN architecture and
-gates `architectures=` library selection.
-
-### 6. Build and upload a sketch
-
-```bash
-arduino-cli compile --fqbn arduino-git:zephyr:frdm_rw612 \
-  libraries/Golioth/examples/GoliothStream
-```
-
-`boards.txt` uploads with `pyocd` (CMSIS-DAP). If your MCU-Link runs SEGGER
-firmware instead, write the sketch into the `user_sketch` partition directly —
-the address is `frdm_rw612.upload.address` in the generated `boards.local.txt`:
-
-```bash
-arduino-cli compile --fqbn arduino-git:zephyr:frdm_rw612 --output-dir /tmp/gs \
-  libraries/Golioth/examples/GoliothStream
-JLinkExe -device RW612 -if SWD -speed 4000 -autoconnect 1 -CommanderScript - <<'EOF'
-r
-loadbin /tmp/gs/GoliothStream.ino.elf-zsk.bin, 0x18323000
-r
-g
-q
-EOF
-```
-
-### 7. Watch it
-
-Two serial ports, and it matters which:
-
-- **MCU-Link VCOM** — Zephyr logs. `zephyr,console` is `flexcomm3`.
-- **Native USB CDC** (`Freedom RW612`, VID `0x1209` PID `0x0002`) — the sketch's
-  `Serial`, and the Zephyr shell after the loader migrates it.
-
-The loader **blocks in `main()` until the native USB CDC is opened** — see the
-`uart_line_ctrl_get(DTR)` loop in `loader/main.c` — so nothing runs until you
-attach a terminal to it.
-
-```bash
-goliothctl logs --device <id> --interval 15m
-```
-
-## Gotchas found while bringing this up
-
-- **`<WiFi.h>` does not compile for `frdm_rw612`.** NXP's `wm_utils.h` calls
-  `hex2bin(ibuf, strlen(ibuf), ...)` with a `const uint8_t *`, which is legal C
-  and illegal C++. It reaches sketches through the llext EDK include tree, so
-  any C++ sketch including `<WiFi.h>` fails. Pre-existing and unrelated to this
-  library — the stock `WiFiWebClient` example fails identically. Not a problem
-  here, because the loader owns Wi-Fi.
-- **Nothing starts DHCP outside a sketch.** The core only calls
-  `net_dhcpv4_start()` from `libraries/SocketWrapper`, via `WiFi.begin()`, and
-  this variant sets no `CONFIG_NET_CONFIG_*`. The glue does it itself.
-- **RSA is not optional.** The DTLS trust root for `coap.golioth.io` is ISRG
-  Root X1, RSA-4096. Without `CONFIG_PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY` and
-  friends, credential parsing fails with `MBEDTLS_ERR_X509_UNKNOWN_OID`
-  (`-0x2100`) even though the device certificate is P-256.
-- **The gateway rejects an empty pouch** with `4.00`. Pouch only queues its
-  header once there is data, so a sync with nothing pending POSTs a zero-length
-  body. The glue skips those syncs — which means **downlink only happens
-  alongside an uplink or an explicit `Golioth.sync()`**. Relevant if you later
-  add Settings or OTA.
-- **`CONFIG_LOG_BACKEND_UART=y` is needed on this variant.** The loader moves
-  the shell (and with it the shell's log backend) to USB CDC, leaving the
-  console UART silent otherwise.
-- **Golioth Logging has no Pouch API.** Logs are a CBOR `{"level","message"}`
-  map streamed to `.s/logs`, picked up by the project's default CBOR logs
-  Pipeline. That is what `Golioth.log()` does.
-
-## Out of scope
-
-Golioth RPC and LightDB State, because Pouch does not implement them (see the
-table above). The BLE GATT device and gateway roles exist in this tree but are
-configured per-variant and are not what this README documents.
 
 ## OTA in practice
 
@@ -318,24 +184,16 @@ It is cosmetic.
 
 ## Compatibility with the community core
 
-`arduino:zephyr_contrib` ships its own prebuilt `frdm_rw612` loader and
-hardcodes `frdm_rw612.upload.address=0x18323000` in its committed `boards.txt`.
-Moving `user_sketch` therefore makes the two mutually exclusive **on the board**,
-even though nothing in this repo affects an installed community core
-(`boards.local.txt` and `platform.local.txt` are gitignored and regenerated by
-`extra/build.sh`).
+`arduino:zephyr_contrib` ships its own prebuilt `frdm_rw612` loader and hardcodes
+`frdm_rw612.upload.address=0x18323000`. This tree keeps that address, so sketch
+uploads line up either way and there is no user-visible address change.
 
-While the board carries the loader built from this tree, compile and upload with
-this tree's platform. Uploading a sketch built against `arduino:zephyr_contrib`
-writes it to `0x18323000`, where this loader does not look, and the console just
-says `Invalid sketch header`.
-
-Going back to the community core means re-flashing its loader, which its
-`boards.txt` does with `pyocd`. On a board whose MCU-Link runs SEGGER firmware
-that will fail rather than silently revert, so restore it over J-Link instead.
-
-If this ever moves upstream, the community `boards.txt` has to change in
-lockstep with the partition map.
+The loader binary itself is still not interchangeable: Pouch registers its
+handlers through linker iterable sections, so the session has to be compiled in,
+and the community prebuilt loader has no `CONFIG_ARDUINO_POUCH`. Golioth sketches
+therefore need the loader from this tree — but a *non*-Golioth sketch built with
+either core loads under either loader, and upstreaming needs no change to the
+community `boards.txt`.
 
 ## Known gaps
 

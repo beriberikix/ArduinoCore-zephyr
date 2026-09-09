@@ -1,0 +1,56 @@
+/*
+ * Copyright (c) Arduino s.r.l. and/or its affiliated companies
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * Flash map for frdm_rw612, shared by BOTH sysbuild images.
+ *
+ * This has to be one file included by the loader *and* by MCUboot. Each image
+ * is a separate Zephyr build with its own devicetree, and MCUboot locates
+ * slot0/slot1 from its own copy. If only the loader's copy moved a slot, the
+ * loader would stage a downloaded image at one address while MCUboot looked for
+ * it at another - a silent corruption rather than a clean failure. Keep the two
+ * in step by construction.
+ *
+ * The stock table is mcuboot(128K) / image-0(3M) / image-1(3M) / storage(rest),
+ * and the Arduino sketch partition used to be carved out of the front of
+ * image-1 - i.e. it *was* MCUboot's staging slot. Something had to give, and it
+ * is image-1 that moves rather than the sketch: nothing hardcodes a slot
+ * address (MCUboot resolves them by devicetree label), whereas 0x18323000 is
+ * committed in the released arduino:zephyr_contrib boards.txt, so moving the
+ * sketch would silently break every upload made with that core.
+ *
+ *   0x0000000  mcuboot        128K
+ *   0x0020000  image-0          3M   signed loader, XIP
+ *   0x0323000  user_sketch  3M-12K   llext, raw, never touched by a swap
+ *   0x0620000  image-1          3M   OTA staging
+ *   0x0920000  storage      ~54.9M
+ *
+ * The 12K gap at 0x320000 is inherited: the sketch partition has started at
+ * 0x323000 since the PoC, and that address is what has to stay put.
+ */
+
+&w25q512jvfiq {
+	partitions {
+		/* Redefined below at new offsets; delete first so the node names
+		 * and unit addresses stay honest. */
+		/delete-node/ partition@320000;
+		/delete-node/ partition@620000;
+
+		user_sketch: partition@323000 {
+			reg = <0x00323000 (DT_SIZE_M(3) - 0x3000)>;
+		};
+
+		slot1_partition: partition@620000 {
+			label = "image-1";
+			reg = <0x00620000 DT_SIZE_M(3)>;
+		};
+
+		storage_partition: partition@920000 {
+			label = "storage";
+			reg = <0x00920000 (DT_SIZE_M(58) - DT_SIZE_K(128) - DT_SIZE_M(3))>;
+		};
+	};
+};
