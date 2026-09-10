@@ -53,6 +53,9 @@ LOG_MODULE_REGISTER(arduino_pouch, CONFIG_ARDUINO_POUCH_LOG_LEVEL);
 #if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
 #include <pouch/transport/coap/client.h>
 #endif
+#if defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
+#include <pouch/transport/http/client.h>
+#endif
 
 #include "arduino_pouch.h"
 #include "pouch_credentials.h"
@@ -91,7 +94,7 @@ static void hb_set(int r, int g, int b)
 #define hb_set(r, g, b)    do { } while (0)
 #endif
 
-#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT) || defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
 /* Root of trust for the DTLS connection to coap.golioth.io. Taken from the
  * Pouch module rather than vendored; see loader/CMakeLists.txt. */
 static const unsigned char dtls_ca_crt[] = {
@@ -176,7 +179,7 @@ out:
 	return key_id;
 }
 
-#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT) || defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
 static int load_dtls_credentials(void)
 {
 	int err;
@@ -297,7 +300,7 @@ static int link_up(void)
 
 	return 0;
 }
-#endif /* CONFIG_POUCH_TRANSPORT_COAP_CLIENT */
+#endif /* COAP_CLIENT || HTTP_CLIENT */
 
 static int pouch_bring_up(void)
 {
@@ -321,15 +324,23 @@ static int pouch_bring_up(void)
 		return err;
 	}
 
-#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT) || defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
 	err = load_dtls_credentials();
 	if (err) {
 		return err;
 	}
 
+#if defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
+	/* Same sec_tag as the CoAP path: pouch's http_client example loads the
+	 * identical CA/cert/key triple, and embeds the same ISRG Root X1. */
+	err = pouch_http_client_init(SEC_TAG, K_FOREVER);
+	if (err) {
+		LOG_ERR("pouch_http_client_init failed: %d", err);
+#else
 	err = pouch_coap_client_init(SEC_TAG);
 	if (err) {
 		LOG_ERR("pouch_coap_client_init failed: %d", err);
+#endif
 		return err;
 	}
 #endif
@@ -458,7 +469,7 @@ static void pouch_thread(void *a, void *b, void *c)
 	k_sem_take(&start_sem, K_FOREVER);
 	atomic_set(&glue_status, POUCH_STATUS_CONNECTING);
 
-#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
+#if defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT) || defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
 	net_mgmt_init_event_callback(&ipv4_cb, ipv4_handler, NET_EVENT_IPV4_ADDR_ADD);
 	net_mgmt_add_event_callback(&ipv4_cb);
 
@@ -538,7 +549,7 @@ static void pouch_thread(void *a, void *b, void *c)
 		k_sleep(K_MSEC(120));
 		hb_set(0, 1, 0);
 	}
-#elif defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT)
+#elif defined(CONFIG_POUCH_TRANSPORT_COAP_CLIENT) || defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
 	LOG_INF("Pouch ready, syncing every %ds", CONFIG_ARDUINO_POUCH_SYNC_PERIOD_S);
 
 	while (true) {
@@ -561,7 +572,13 @@ static void pouch_thread(void *a, void *b, void *c)
 			continue;
 		}
 
+#if defined(CONFIG_POUCH_TRANSPORT_HTTP_CLIENT)
+		/* One long-lived request rather than ~1500 block round trips; the
+		 * OTA artifact streams inside it, so give it room. */
+		err = pouch_http_client_sync(K_SECONDS(CONFIG_POUCH_HTTP_TIMEOUT_S));
+#else
 		err = pouch_coap_client_sync();
+#endif
 		if (err) {
 			/* Stay online: the link is up, this pouch just did not land. */
 			LOG_WRN("Pouch sync failed: %d", err);
@@ -572,7 +589,7 @@ static void pouch_thread(void *a, void *b, void *c)
 		}
 	}
 #else
-#error "CONFIG_ARDUINO_POUCH needs a Pouch transport: BLE GATT or CoAP client"
+#error "CONFIG_ARDUINO_POUCH needs a Pouch transport: BLE GATT, CoAP client or HTTP client"
 #endif
 }
 
